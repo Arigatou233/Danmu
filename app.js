@@ -3,13 +3,13 @@ const $=id=>document.getElementById(id), esc=s=>String(s??'').replace(/[&<>"']/g
 const sourceName={bilibili:'B站官方',up:'B站 UP主',ani:'动画疯',import:'其他来源',bilibili_official:'B站官方',bilibili_uploader:'B站 UP主',bahamut:'动画疯'};
 const SUPABASE_URL='https://srysjqhwlzkkdvxvnhzq.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY='sb_publishable_RpYA3Z8pkylRQMAGvy1dhQ_DfSM2YDd';
-const supabase=window.supabase?.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY);
+const supabase=(typeof window.supabase?.createClient==='function')?window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY):null;
 let currentUser=null,isAdmin=false,cloudReady=false;
 const storeKey='danmaku_archive_v1';let db={anime:[],entries:[],alignments:[]};let selectedAnime=null,selectedEpisode=1;
 try{const saved=JSON.parse(localStorage.getItem(storeKey)||'null');if(saved&&Array.isArray(saved.anime)&&Array.isArray(saved.entries)){db={...db,...saved};}}catch(e){console.warn('无法读取本地档案',e)}
 function save(){try{localStorage.setItem(storeKey,JSON.stringify(db));return true}catch(e){alert('浏览器存储空间不足，请先导出数据或清理旧档案。');return false}}
 function show(page){document.querySelectorAll('main>section').forEach(s=>s.classList.toggle('hidden',s.id!==page));document.querySelectorAll('[data-page]').forEach(b=>b.classList.toggle('active',b.dataset.page===page));if(page==='catalog')renderCatalog();if(page==='stats')renderStats();if(page==='search')renderSearch();if(page==='import')renderAlignSelectors();window.scrollTo({top:0,behavior:'instant'})}
-document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>show(b.dataset.page));document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>show(b.dataset.go));
+document.addEventListener('click',e=>{const nav=e.target.closest('[data-page]');if(nav){e.preventDefault();show(nav.dataset.page);return}const go=e.target.closest('[data-go]');if(go){e.preventDefault();show(go.dataset.go);if(go.id==='headerLogin')setTimeout(()=>$('authEmail')?.focus(),50);}});
 function animeSources(a){return [...new Set(db.entries.filter(x=>x.animeId===a.id).map(x=>x.source))]}
 function card(a){let count=db.entries.filter(x=>x.animeId===a.id).length;let src=animeSources(a).map(s=>sourceName[s]||s).join(' / ');return `<article class="anime" data-anime="${esc(a.id)}"><div class="cover">${a.cover&&/^https:\/\//.test(a.cover)?`<img loading="lazy" src="${esc(a.cover)}" alt="">`:'✦'}</div><div class="body"><b>${esc(a.title)}</b><small>${count.toLocaleString()} 条弹幕 · ${esc(src)}</small></div></article>`}
 function bindCards(){document.querySelectorAll('[data-anime]').forEach(el=>el.onclick=()=>openAnime(el.dataset.anime))}
@@ -43,7 +43,7 @@ $('exportXML').onclick=()=>{const a=detailEntries();const xml='<?xml version="1.
 const platformToLocal={bilibili_official:'bilibili',bilibili_uploader:'up',bahamut:'ani'};
 const localToPlatform={bilibili:'bilibili_official',up:'bilibili_uploader',ani:'bahamut',import:'bilibili_uploader'};
 function cloudMsg(t){const el=$('cloudMessage');if(el)el.textContent=t;const st=$('syncStatus');if(st)st.textContent=cloudReady?'云端已连接':'本地/离线模式'}
-async function refreshAuth(){if(!supabase){cloudMsg('Supabase SDK 加载失败，请检查网络或稍后刷新。');return}const {data:{session}}=await supabase.auth.getSession();currentUser=session?.user||null;isAdmin=false;if(currentUser){const {data,error}=await supabase.from('profiles').select('is_admin').eq('id',currentUser.id).maybeSingle();if(!error)isAdmin=!!data?.is_admin}cloudMsg(currentUser?(isAdmin?`已登录管理员：${currentUser.email}。可以写入云端。`:`已登录：${currentUser.email}，当前账号不是管理员。`):'云端已连接。访客可读取公开档案；管理员登录后可上传数据。');}
+async function refreshAuth(){if(!supabase){cloudReady=false;cloudMsg('Supabase SDK 未加载。请检查网络/CDN 后刷新；网页导航和本地功能仍可使用。');return}try{const {data:{session},error:sessionError}=await supabase.auth.getSession();if(sessionError)throw sessionError;currentUser=session?.user||null;isAdmin=false;if(currentUser){const {data,error}=await supabase.from('profiles').select('is_admin').eq('id',currentUser.id).maybeSingle();if(error)throw error;isAdmin=!!data?.is_admin}cloudMsg(currentUser?(isAdmin?`已登录管理员：${currentUser.email}。可以写入云端。`:`已登录：${currentUser.email}，当前账号不是管理员。`):'云端已连接。访客可读取公开档案；管理员登录后可上传数据。');}catch(e){cloudReady=false;cloudMsg('云端认证检查失败：'+(e.message||e));}}
 async function fetchAll(table,columns='*',orderColumn='id'){
   const rows=[];for(let from=0;from<200000;from+=1000){
     const {data,error}=await supabase.from(table).select(columns).order(orderColumn,{ascending:true}).range(from,from+999);
@@ -78,7 +78,7 @@ async function cloudSaveImport(anime,episode,source,items){const localId=anime.i
 const known=new Set(previous.map(x=>`${x.time_ms}|${x.content}`));
 const unique=items.filter(x=>{const k=`${Math.round(x.time*1000)}|${x.text}`;if(known.has(k))return false;known.add(k);return true});
 for(let i=0;i<unique.length;i+=300){const rows=unique.slice(i,i+300).map(x=>({source_id:v.id,time_ms:Math.round(x.time*1000),content:x.text}));const {error:de}=await supabase.from('danmaku').insert(rows);if(de)throw de;}anime.cloudId=a.id;cloudMsg(`云端保存成功：${anime.title} 第${episode}集，${items.length} 条弹幕。`);db.entries=db.entries.filter(x=>x.animeId!==localId);db.anime=db.anime.filter(x=>x.id!==localId);await cloudPull();}
-if(supabase){$('authLogin').onclick=async()=>{const email=$('authEmail').value.trim(),password=$('authPassword').value;if(!email||!password){cloudMsg('请填写管理员邮箱和密码。');return}const {error}=await supabase.auth.signInWithPassword({email,password});if(error){cloudMsg('登录失败：'+error.message);return}await refreshAuth();};$('authLogout').onclick=async()=>{await supabase.auth.signOut();currentUser=null;isAdmin=false;await refreshAuth();};supabase.auth.onAuthStateChange(()=>setTimeout(refreshAuth,0));}
+if(supabase){$('authLogin').onclick=async()=>{const email=$('authEmail').value.trim(),password=$('authPassword').value;if(!email||!password){cloudMsg('请填写管理员邮箱和密码。');return}const {error}=await supabase.auth.signInWithPassword({email,password});if(error){cloudMsg('登录失败：'+error.message);return}await refreshAuth();};$('authLogout').onclick=async()=>{const {error}=await supabase.auth.signOut();if(error){cloudMsg('退出失败：'+error.message);return}currentUser=null;isAdmin=false;await refreshAuth();};supabase.auth.onAuthStateChange(()=>setTimeout(refreshAuth,0));}else{cloudMsg('Supabase SDK 未加载：可以浏览本地页面，但暂时不能登录或同步云端。');}
 
 renderRecent();renderStats();renderAlignSelectors();show('home');
 if(supabase){refreshAuth().then(cloudPull);}
